@@ -1,4 +1,3 @@
-
 name: CI Pipeline
 
 on:
@@ -17,17 +16,20 @@ jobs:
       - name: Check out the code
         uses: actions/checkout@v2
 
+      # Set up Docker Buildx (for multi-platform builds, caching, etc.)
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v2
 
+      # Cache Docker layers to speed up builds
       - name: Cache Docker layers
-        uses: actions/cache@v2
+        uses: actions/cache@v3  # Updated to v3
         with:
           path: /tmp/.buildx-cache
           key: ${{ runner.os }}-buildx-${{ github.sha }}
           restore-keys: |
             ${{ runner.os }}-buildx-
 
+      # Log in to Azure Container Registry
       - name: Log in to Azure Container Registry
         uses: azure/docker-login@v1
         with:
@@ -35,15 +37,18 @@ jobs:
           username: ${{ secrets.ACR_USERNAME }}
           password: ${{ secrets.ACR_PASSWORD }}
 
+      # Build and push Docker image
       - name: Build Docker image
         run: |
           docker build -t ${{ secrets.ACR_LOGIN_SERVER }}/patient-service:${{ github.sha }} .
           docker push ${{ secrets.ACR_LOGIN_SERVER }}/patient-service:${{ github.sha }}
 
+      # Format and validate Terraform files
       - name: Terraform Format and Validate
         run: |
           terraform fmt -check
           terraform validate
 
+      # Run Terraform Plan
       - name: Terraform Plan
         run: terraform plan -out=tfplan
