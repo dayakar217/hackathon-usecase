@@ -1,4 +1,4 @@
-name: CI Pipeline
+name: CI/CD Pipeline for Healthcare Microservices
 
 on:
   push:
@@ -9,46 +9,50 @@ on:
       - main
 
 jobs:
-  build:
+  build_and_deploy:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Check out the code
-        uses: actions/checkout@v2
+    - name: Checkout code
+      uses: actions/checkout@v2
 
-      # Set up Docker Buildx (for multi-platform builds, caching, etc.)
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v2
+    # Step 1: Log in to Azure
+    - name: Set up Azure CLI
+      uses: azure/setup-azure-cli@v1
 
-      # Cache Docker layers to speed up builds
-      - name: Cache Docker layers
-        uses: actions/cache@v3  # Updated to v3
-        with:
-          path: /tmp/.buildx-cache
-          key: ${{ runner.os }}-buildx-${{ github.sha }}
-          restore-keys: |
-            ${{ runner.os }}-buildx-
+    - name: Log in to Azure
+      run: az login --service-principal -u ${{ secrets.AZURE_USERNAME }} -p ${{ secrets.AZURE_PASSWORD }} --tenant ${{ secrets.AZURE_TENANT_ID }}
 
-      # Log in to Azure Container Registry
-      - name: Log in to Azure Container Registry
-        uses: azure/docker-login@v1
-        with:
-          login-server: ${{ secrets.ACR_LOGIN_SERVER }}
-          username: ${{ secrets.ACR_USERNAME }}
-          password: ${{ secrets.ACR_PASSWORD }}
+    # Step 2: Set up Docker Buildx for caching
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v2
 
-      # Build and push Docker image
-      - name: Build Docker image
-        run: |
-          docker build -t ${{ secrets.ACR_LOGIN_SERVER }}/patient-service:${{ github.sha }} .
-          docker push ${{ secrets.ACR_LOGIN_SERVER }}/patient-service:${{ github.sha }}
+    # Step 3: Build and push Docker images to ACR
+    - name: Build and push Docker image for patient-service
+      run: |
+        docker build -t ${{ secrets.ACR_NAME }}.azurecr.io/patient-service:${{ github.sha }} .
+        docker push ${{ secrets.ACR_NAME }}.azurecr.io/patient-service:${{ github.sha }}
+        
+    - name: Build and push Docker image for appointment-service
+      run: |
+        docker build -t ${{ secrets.ACR_NAME }}.azurecr.io/appointment-service:${{ github.sha }} .
+        docker push ${{ secrets.ACR_NAME }}.azurecr.io/appointment-service:${{ github.sha }}
 
-      # Format and validate Terraform files
-      - name: Terraform Format and Validate
-        run: |
-          terraform fmt -check
-          terraform validate
+    - name: Build and push Docker image for order-service
+      run: |
+        docker build -t ${{ secrets.ACR_NAME }}.azurecr.io/order-service:${{ github.sha }} .
+        docker push ${{ secrets.ACR_NAME }}.azurecr.io/order-service:${{ github.sha }}
 
-      # Run Terraform Plan
-      - name: Terraform Plan
-        run: terraform plan -out=tfplan
+    # Step 4: Deploy to AKS
+    - name: Set up kubectl
+      uses: azure/setup-kubectl@v1
+      with:
+        kubectl-version: 'latest'
+
+    - name: Deploy to AKS
+      run: |
+        kubectl apply -f k8s/deployment.yaml
+        kubectl apply -f k8s/service.yaml
+        kubectl rollout status deployment/patient-service
+        kubectl rollout status deployment/appointment-service
+        kubectl rollout status deployment/order-service
