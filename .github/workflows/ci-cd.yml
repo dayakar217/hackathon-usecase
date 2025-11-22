@@ -16,9 +16,9 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v2
 
-    # Step 1: Log in to Azure
+    # Step 1: Set up Azure CLI (updated action)
     - name: Set up Azure CLI
-      uses: azure/setup-azure-cli@v1
+      uses: azure/azure-cli-action@v1  # Use the latest stable version of this action
 
     - name: Log in to Azure
       run: az login --service-principal -u ${{ secrets.AZURE_USERNAME }} -p ${{ secrets.AZURE_PASSWORD }} --tenant ${{ secrets.AZURE_TENANT_ID }}
@@ -43,12 +43,13 @@ jobs:
         docker build -t ${{ secrets.ACR_NAME }}.azurecr.io/order-service:${{ github.sha }} .
         docker push ${{ secrets.ACR_NAME }}.azurecr.io/order-service:${{ github.sha }}
 
-    # Step 4: Deploy to AKS
+    # Step 4: Set up kubectl to deploy to AKS
     - name: Set up kubectl
       uses: azure/setup-kubectl@v1
       with:
         kubectl-version: 'latest'
 
+    # Step 5: Deploy to AKS
     - name: Deploy to AKS
       run: |
         kubectl apply -f k8s/deployment.yaml
