@@ -9,79 +9,102 @@ on:
       - main
 
 jobs:
-  build_and_deploy:
+  # Step 1: Build and Push Docker Images in Parallel
+  build_and_push:
     runs-on: ubuntu-latest
-
+    strategy:
+      matrix:
+        service: [patient-service, application-service, order-service]
     steps:
-    # Step 1: Checkout the repository code
-    - name: Checkout code
-      uses: actions/checkout@v2
+      # Checkout code
+      - name: Checkout repository
+        uses: actions/checkout@v3
 
-    # Step 2: Install Azure CLI manually
-    - name: Install Azure CLI
-      run: |
-        curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
-        az --version
+      # Install Azure CLI
+      - name: Install Azure CLI
+        run: |
+          curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+          az --version
 
-    # Step 3: Log in to Azure using a Service Principal
-    - name: Log in to Azure
-      run: |
-        az login --service-principal -u ${{ secrets.AZURE_USERNAME }} -p ${{ secrets.AZURE_PASSWORD }} --tenant ${{ secrets.AZURE_TENANT_ID }}
+      # Log in to Azure using Service Principal
+      - name: Azure Login
+        run: |
+          az login --service-principal -u ${{ secrets.AZURE_USERNAME }} -p ${{ secrets.AZURE_PASSWORD }} --tenant ${{ secrets.AZURE_TENANT_ID }}
 
-    # Step 4: Set up Docker Buildx for caching and building Docker images
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v2
+      # Login Docker to ACR
+      - name: Login to Azure Container Registry
+        run: |
+          az acr login --name ${{ secrets.ACR_NAME }}
 
-    # Step 5: Cache Docker layers to speed up builds
-    - name: Cache Docker layers
-      uses: actions/cache@v3
-      with:
-        path: /tmp/.buildx-cache
-        key: ${{ runner.os }}-buildx-${{ github.sha }}
-        restore-keys: |
-          ${{ runner.os }}-buildx-
+      # Set up Docker Buildx
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
 
-    # Step 6: Build and push Docker images for the services to Azure Container Registry (ACR)
+      # Cache Docker layers
+      - name: Cache Docker layers
+        uses: actions/cache@v3
+        with:
+          path: /tmp/.buildx-cache
+          key: ${{ runner.os }}-buildx-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-buildx-
 
-    # Build and push the Patient Service
-    - name: Build and push Docker image for patient-service
-      run: |
-        cd patient-service/src
-        docker build -t ${{ secrets.ACR_NAME }}.azurecr.io/patient-service:${{ github.sha }} .
-        docker push ${{ secrets.ACR_NAME }}.azurecr.io/patient-service:${{ github.sha }}
+      # Build & push Docker image
+      - name: Build and Push Docker Image
+        run: |
+          docker build -t ${{ secrets.ACR_NAME }}.azurecr.io/${{ matrix.service }}:${{ github.sha }} ./${{ matrix.service }}
+          docker push ${{ secrets.ACR_NAME }}.azurecr.io/${{ matrix.service }}:${{ github.sha }}
 
-    # Build and push the Application Service
-    - name: Build and push Docker image for application-service
-      run: |
-        cd application-service/src
-        docker build -t ${{ secrets.ACR_NAME }}.azurecr.io/application-service:${{ github.sha }} .
-        docker push ${{ secrets.ACR_NAME }}.azurecr.io/application-service:${{ github.sha }}
+  # Step 2: Deploy services to AKS
+  deploy_to_aks:
+    needs: build_and_push
+    runs-on: ubuntu-latest
+    steps:
+      # Checkout code
+      - name: Checkout repository
+        uses: actions/checkout@v3
 
-    # Build and push the Order Service
-    - name: Build and push Docker image for order-service
-      run: |
-        cd order-service
-        docker build -t ${{ secrets.ACR_NAME }}.azurecr.io/order-service:${{ github.sha }} .
-        docker push ${{ secrets.ACR_NAME }}.azurecr.io/order-service:${{ github.sha }}
+      # Install Azure CLI
+      - name: Install Azure CLI
+        run: |
+          curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
 
-    # Step 7: Set up kubectl to interact with AKS
-    - name: Set up kubectl
-      uses: azure/setup-kubectl@v1
-      with:
-        kubectl-version: 'latest'
+      # Azure Login
+      - name: Azure Login
+        run: |
+          az login --service-principal -u ${{ secrets.AZURE_USERNAME }} -p ${{ secrets.AZURE_PASSWORD }} --tenant ${{ secrets.AZURE_TENANT_ID }}
 
-    # Step 8: Deploy the services to Azure Kubernetes Service (AKS)
-    - name: Deploy to AKS
-      run: |
-        # Get AKS credentials
-        az aks get-credentials --resource-group ${{ secrets.AKS_RESOURCE_GROUP }} --name ${{ secrets.AKS_CLUSTER_NAME }}
+      # Set up kubectl
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v3
+        with:
+          version: 'latest'
 
-        # Apply the Kubernetes configurations for each service (deployment.yaml and service.yaml)
-        kubectl apply -f kubernetes/patient-service-deployment.yaml
-        kubectl apply -f kubernetes/application-service-deployment.yaml
-        kubectl apply -f kubernetes/order-service-deployment.yaml
+      # Get AKS credentials
+      - name: Configure AKS
+        run: |
+          az aks get-credentials --resource-group ${{ secrets.AKS_RESOURCE_GROUP }} --name ${{ secrets.AKS_CLUSTER_NAME }}
 
-        # Wait for the services to be deployed
-        kubectl rollout status deployment/patient-service
-        kubectl rollout status deployment/application-service
-        kubectl rollout status deployment/order-service
+      # Deploy with Helm and inject secrets from Azure Key Vault
+      - name: Deploy services via Helm
+        run: |
+          NAMESPACE=healthcare-dev
+          kubectl create namespace $NAMESPACE || true
+
+          for service in patient-service application-service order-service
+          do
+            echo "Deploying $service..."
+            
+            # Retrieve secrets from Azure Key Vault
+            DB_PASSWORD=$(az keyvault secret show --vault-name ${{ secrets.KEYVAULT_NAME }} --name ${service}-db-password --query value -o tsv)
+
+            # Deploy via Helm
+            helm upgrade --install $service ./helm/$service \
+              --namespace $NAMESPACE \
+              --set image.repository=${{ secrets.ACR_NAME }}.azurecr.io/$service \
+              --set image.tag=${{ github.sha }} \
+              --set env.DB_PASSWORD=$DB_PASSWORD
+
+            # Wait for deployment to complete
+            kubectl rollout status deployment/$service -n $NAMESPACE
+          done
