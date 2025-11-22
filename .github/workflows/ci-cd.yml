@@ -23,7 +23,7 @@ jobs:
         curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
         az --version
 
-    # Step 3: Log in to Azure using Service Principal
+    # Step 3: Log in to Azure using a Service Principal
     - name: Log in to Azure
       run: |
         az login --service-principal -u ${{ secrets.AZURE_USERNAME }} -p ${{ secrets.AZURE_PASSWORD }} --tenant ${{ secrets.AZURE_TENANT_ID }}
@@ -41,19 +41,26 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-buildx-
 
-    # Step 6: Build and push Docker images for all services to Azure Container Registry (ACR)
+    # Step 6: Build and push Docker images for the services to Azure Container Registry (ACR)
+
+    # Build and push the Patient Service
     - name: Build and push Docker image for patient-service
       run: |
+        cd patient-service/src
         docker build -t ${{ secrets.ACR_NAME }}.azurecr.io/patient-service:${{ github.sha }} .
         docker push ${{ secrets.ACR_NAME }}.azurecr.io/patient-service:${{ github.sha }}
-        
-    - name: Build and push Docker image for appointment-service
-      run: |
-        docker build -t ${{ secrets.ACR_NAME }}.azurecr.io/appointment-service:${{ github.sha }} .
-        docker push ${{ secrets.ACR_NAME }}.azurecr.io/appointment-service:${{ github.sha }}
 
+    # Build and push the Application Service
+    - name: Build and push Docker image for application-service
+      run: |
+        cd application-service/src
+        docker build -t ${{ secrets.ACR_NAME }}.azurecr.io/application-service:${{ github.sha }} .
+        docker push ${{ secrets.ACR_NAME }}.azurecr.io/application-service:${{ github.sha }}
+
+    # Build and push the Order Service
     - name: Build and push Docker image for order-service
       run: |
+        cd order-service
         docker build -t ${{ secrets.ACR_NAME }}.azurecr.io/order-service:${{ github.sha }} .
         docker push ${{ secrets.ACR_NAME }}.azurecr.io/order-service:${{ github.sha }}
 
@@ -66,8 +73,15 @@ jobs:
     # Step 8: Deploy the services to Azure Kubernetes Service (AKS)
     - name: Deploy to AKS
       run: |
-        kubectl apply -f k8s/deployment.yaml
-        kubectl apply -f k8s/service.yaml
+        # Get AKS credentials
+        az aks get-credentials --resource-group ${{ secrets.AKS_RESOURCE_GROUP }} --name ${{ secrets.AKS_CLUSTER_NAME }}
+
+        # Apply the Kubernetes configurations for each service (deployment.yaml and service.yaml)
+        kubectl apply -f kubernetes/patient-service-deployment.yaml
+        kubectl apply -f kubernetes/application-service-deployment.yaml
+        kubectl apply -f kubernetes/order-service-deployment.yaml
+
+        # Wait for the services to be deployed
         kubectl rollout status deployment/patient-service
-        kubectl rollout status deployment/appointment-service
+        kubectl rollout status deployment/application-service
         kubectl rollout status deployment/order-service
