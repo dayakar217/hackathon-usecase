@@ -12,9 +12,19 @@ jobs:
   # Step 1: Build (CI)
   build:
     runs-on: ubuntu-latest
+
     strategy:
       matrix:
-        service: [patient-service/src, application-service/src, order-service]
+        include:
+          - service: patient-service
+            context: patient-service
+            dockerfile: src/Dockerfile
+          - service: application-service
+            context: application-service
+            dockerfile: src/Dockerfile
+          - service: order-service
+            context: order-service
+            dockerfile: Dockerfile
 
     steps:
       - name: Checkout repository
@@ -23,37 +33,39 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v2
 
-      # ✅ Login only on push (not needed for PR)
+      # ✅ Login only on push
       - name: Login to DockerHub
         if: github.event_name == 'push'
         run: |
           echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
 
-      # ✅ Build always
+      # ✅ Build
       - name: Build Docker Image
         run: |
-          docker build -t ${{ matrix.service }}:${{ github.sha }} ./${{ matrix.service }}
+          docker build \
+            -t ${{ matrix.service }}:${{ github.sha }} \
+            -f ./${{ matrix.context }}/${{ matrix.dockerfile }} \
+            ./${{ matrix.context }}
 
-      # ✅ Push only on push (skip for PR)
+      # ✅ Push only on push
       - name: Push Docker Image
         if: github.event_name == 'push'
         run: |
-          docker tag ${{ matrix.service }}:${{ github.sha }} ${{ secrets.DOCKER_USERNAME }}/${{ matrix.service }}:${{ github.sha }}
+          docker tag ${{ matrix.service }}:${{ github.sha }} \
+            ${{ secrets.DOCKER_USERNAME }}/${{ matrix.service }}:${{ github.sha }}
+
           docker push ${{ secrets.DOCKER_USERNAME }}/${{ matrix.service }}:${{ github.sha }}
 
   # Step 2: Deploy (CD)
   deploy:
     needs: build
     runs-on: ubuntu-latest
-
-    # ✅ Only deploy on push
     if: github.event_name == 'push'
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      # Example: Deploy using Docker Compose (or SSH / Kubernetes / etc.)
       - name: Deploy services
         run: |
           echo "Deploying services..."
@@ -64,7 +76,6 @@ jobs:
 
             docker pull ${{ secrets.DOCKER_USERNAME }}/$service:${{ github.sha }}
 
-            # Example run (replace with your real deployment)
             docker stop $service || true
             docker rm $service || true
 
