@@ -14,7 +14,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        service: [patient-service, application-service, order-service]
+        service: [patient-service/src, application-service/src, order-service]
 
     steps:
       - name: Checkout repository
