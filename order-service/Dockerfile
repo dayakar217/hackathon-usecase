@@ -13,7 +13,7 @@ COPY src ./src
 RUN mvn clean package -DskipTests
 
 # Step 5: Use a smaller JRE image to run the application
-FROM openjdk:11-jre-slim
+FROM eclipse-temurin:11-jre-jammy
 
 # Step 6: Set the working directory for the runtime image
 WORKDIR /app
