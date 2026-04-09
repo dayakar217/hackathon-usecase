@@ -9,102 +9,67 @@ on:
       - main
 
 jobs:
-  # Step 1: Build and Push Docker Images in Parallel
-  build_and_push:
+  # Step 1: Build (CI)
+  build:
     runs-on: ubuntu-latest
     strategy:
       matrix:
         service: [patient-service, application-service, order-service]
+
     steps:
-      # Checkout code
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      # Install Azure CLI
-      - name: Install Azure CLI
-        run: |
-          curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
-          az --version
-
-      # Log in to Azure using Service Principal
-      - name: Azure Login
-        run: |
-          az login --service-principal -u ${{ secrets.AZURE_USERNAME }} -p ${{ secrets.AZURE_PASSWORD }} --tenant ${{ secrets.AZURE_TENANT_ID }}
-
-      # Login Docker to ACR
-      - name: Login to Azure Container Registry
-        run: |
-          az acr login --name ${{ secrets.ACR_NAME }}
-
-      # Set up Docker Buildx
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v2
 
-      # Cache Docker layers
-      - name: Cache Docker layers
-        uses: actions/cache@v3
-        with:
-          path: /tmp/.buildx-cache
-          key: ${{ runner.os }}-buildx-${{ github.sha }}
-          restore-keys: |
-            ${{ runner.os }}-buildx-
-
-      # Build & push Docker image
-      - name: Build and Push Docker Image
+      # ✅ Login only on push (not needed for PR)
+      - name: Login to DockerHub
+        if: github.event_name == 'push'
         run: |
-          docker build -t ${{ secrets.ACR_NAME }}.azurecr.io/${{ matrix.service }}:${{ github.sha }} ./${{ matrix.service }}
-          docker push ${{ secrets.ACR_NAME }}.azurecr.io/${{ matrix.service }}:${{ github.sha }}
+          echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
 
-  # Step 2: Deploy services to AKS
-  deploy_to_aks:
-    needs: build_and_push
+      # ✅ Build always
+      - name: Build Docker Image
+        run: |
+          docker build -t ${{ matrix.service }}:${{ github.sha }} ./${{ matrix.service }}
+
+      # ✅ Push only on push (skip for PR)
+      - name: Push Docker Image
+        if: github.event_name == 'push'
+        run: |
+          docker tag ${{ matrix.service }}:${{ github.sha }} ${{ secrets.DOCKER_USERNAME }}/${{ matrix.service }}:${{ github.sha }}
+          docker push ${{ secrets.DOCKER_USERNAME }}/${{ matrix.service }}:${{ github.sha }}
+
+  # Step 2: Deploy (CD)
+  deploy:
+    needs: build
     runs-on: ubuntu-latest
+
+    # ✅ Only deploy on push
+    if: github.event_name == 'push'
+
     steps:
-      # Checkout code
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      # Install Azure CLI
-      - name: Install Azure CLI
+      # Example: Deploy using Docker Compose (or SSH / Kubernetes / etc.)
+      - name: Deploy services
         run: |
-          curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
-
-      # Azure Login
-      - name: Azure Login
-        run: |
-          az login --service-principal -u ${{ secrets.AZURE_USERNAME }} -p ${{ secrets.AZURE_PASSWORD }} --tenant ${{ secrets.AZURE_TENANT_ID }}
-
-      # Set up kubectl
-      - name: Set up kubectl
-        uses: azure/setup-kubectl@v3
-        with:
-          version: 'latest'
-
-      # Get AKS credentials
-      - name: Configure AKS
-        run: |
-          az aks get-credentials --resource-group ${{ secrets.AKS_RESOURCE_GROUP }} --name ${{ secrets.AKS_CLUSTER_NAME }}
-
-      # Deploy with Helm and inject secrets from Azure Key Vault
-      - name: Deploy services via Helm
-        run: |
-          NAMESPACE=healthcare-dev
-          kubectl create namespace $NAMESPACE || true
+          echo "Deploying services..."
 
           for service in patient-service application-service order-service
           do
             echo "Deploying $service..."
-            
-            # Retrieve secrets from Azure Key Vault
-            DB_PASSWORD=$(az keyvault secret show --vault-name ${{ secrets.KEYVAULT_NAME }} --name ${service}-db-password --query value -o tsv)
 
-            # Deploy via Helm
-            helm upgrade --install $service ./helm/$service \
-              --namespace $NAMESPACE \
-              --set image.repository=${{ secrets.ACR_NAME }}.azurecr.io/$service \
-              --set image.tag=${{ github.sha }} \
-              --set env.DB_PASSWORD=$DB_PASSWORD
+            docker pull ${{ secrets.DOCKER_USERNAME }}/$service:${{ github.sha }}
 
-            # Wait for deployment to complete
-            kubectl rollout status deployment/$service -n $NAMESPACE
+            # Example run (replace with your real deployment)
+            docker stop $service || true
+            docker rm $service || true
+
+            docker run -d \
+              --name $service \
+              -p 80:80 \
+              ${{ secrets.DOCKER_USERNAME }}/$service:${{ github.sha }}
           done
