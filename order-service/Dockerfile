@@ -19,7 +19,7 @@ FROM eclipse-temurin:17-jre
 WORKDIR /app
 
 # Step 7: Copy the JAR file from the build stage
-COPY --from=build /app/target/order-service.jar /app/order-service.jar
+COPY --from=build /app/target/*.jar /app/order-service.jar
 
 # Step 8: Expose the port that the application will run on (typically 8080 for Spring Boot)
 EXPOSE 8080
