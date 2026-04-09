@@ -5,7 +5,7 @@ FROM node:16-alpine
 WORKDIR /usr/src/app
 
 # Step 3: Copy the index.js (and any other needed files) into the container
-COPY index.js ./
+COPY src/index.js ./
 
 # Step 4: Install required Node.js dependencies (e.g., express)
 RUN npm install express
