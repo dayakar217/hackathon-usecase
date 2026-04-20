@@ -9,7 +9,7 @@ on:
       - main
 
 jobs:
-  # Step 1: Build (CI)
+  # Step 1: Build (CI) 
   build:
     runs-on: self-hosted-dev
 
