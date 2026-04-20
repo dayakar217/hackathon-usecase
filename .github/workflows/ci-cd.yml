@@ -9,7 +9,7 @@ on:
       - main
 
 jobs:
-  # Step 1: Build (CI) 
+  # Step 1: Build (CI)
   build:
     runs-on: self-hosted-dev
 
@@ -30,16 +30,29 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v3
 
+      # ✅ SonarQube Analysis (BEFORE Docker build)
+      - name: SonarQube Analysis
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+        run: |
+          sonar-scanner \
+            -Dsonar.projectKey=${{ matrix.service }} \
+            -Dsonar.projectName=${{ matrix.service }} \
+            -Dsonar.sources=./${{ matrix.context }} \
+            -Dsonar.host.url=$SONAR_HOST_URL \
+            -Dsonar.login=$SONAR_TOKEN
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v2
 
-      #  Login only on push
+      # Login only on push
       - name: Login to DockerHub
         if: github.event_name == 'push'
         run: |
           echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
 
-      #  Build
+      # Build Docker Image (runs only if SonarQube passes)
       - name: Build Docker Image
         run: |
           docker build \
@@ -47,7 +60,7 @@ jobs:
             -f ./${{ matrix.context }}/${{ matrix.dockerfile }} \
             ./${{ matrix.context }}
 
-      #  Push only on push
+      # Push only on push
       - name: Push Docker Image
         if: github.event_name == 'push'
         run: |
